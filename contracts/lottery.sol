@@ -1,20 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-interface IERC20 {
-    function transferFrom(
-        address sender,
-        address recipient,
-        uint256 amount
-    ) external returns (bool);
+import "./IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
 
-    function transfer(
-        address recipient,
-        uint256 amount
-    ) external returns (bool);
-}
-
-contract MultiTokenLottery {
+contract MultiTokenLottery is Ownable(msg.sender) {
     struct Winner {
         address winnerAddress;
         uint256 round;
@@ -33,9 +23,17 @@ contract MultiTokenLottery {
 
     mapping(address => Lottery) public lotteries;
     address public nullAddress = 0x000000000000000000000000000000000000dEaD;
+    address public reserveFund;
 
-    constructor() {
-        // Initialize lotteries for different tokens if necessary
+    constructor(address _reserveFund) {
+        require(_reserveFund != address(0), "Invalid reserve fund address");
+        reserveFund = _reserveFund;
+    }
+
+    // Only the owner can set the reserve fund
+    function setReserveFund(address _reserveFund) external onlyOwner {
+        require(_reserveFund != address(0), "Invalid reserve fund address");
+        reserveFund = _reserveFund;
     }
 
     function createLottery(
@@ -64,8 +62,18 @@ contract MultiTokenLottery {
         require(block.timestamp < lottery.roundEndTime, "Lottery round ended");
 
         uint256 totalCost = lottery.ticketPrice * quantity;
+        require(totalCost >= lottery.ticketPrice, "Cost calculation overflow"); // Additional check
 
-        // Transfer total ticket price
+        require(
+            IERC20(tokenAddress).allowance(msg.sender, address(this)) >=
+                totalCost,
+            "Insufficient allowance"
+        );
+        require(
+            IERC20(tokenAddress).balanceOf(msg.sender) >= totalCost,
+            "Insufficient balance"
+        );
+
         require(
             IERC20(tokenAddress).transferFrom(
                 msg.sender,
@@ -75,13 +83,17 @@ contract MultiTokenLottery {
             "Ticket purchase failed"
         );
 
-        // 50% to pool, 50% to burn
-        uint256 poolShare = totalCost / 2;
-        lottery.prizePool += poolShare;
-        lottery.totalBurned += poolShare; // Track total burned
-        IERC20(tokenAddress).transfer(nullAddress, poolShare);
+        // 40% to pool, 40% to burn, 20% to reserve fund
+        uint256 poolShare = (totalCost * 40) / 100;
+        uint256 burnShare = (totalCost * 40) / 100;
+        uint256 reserveShare = (totalCost * 20) / 100;
 
-        // Add participants
+        lottery.prizePool += poolShare;
+        lottery.totalBurned += burnShare;
+
+        IERC20(tokenAddress).transfer(nullAddress, burnShare);
+        IERC20(tokenAddress).transfer(reserveFund, reserveShare);
+
         for (uint256 i = 0; i < quantity; i++) {
             lottery.participants.push(msg.sender);
         }
@@ -93,19 +105,15 @@ contract MultiTokenLottery {
         require(block.timestamp >= lottery.roundEndTime, "Round not yet ended");
         require(lottery.participants.length > 0, "No participants");
 
-        // Random winner
         uint256 winnerIndex = random(tokenAddress) %
             lottery.participants.length;
         address winner = lottery.participants[winnerIndex];
 
-        // Transfer prize to winner
         IERC20(tokenAddress).transfer(winner, lottery.prizePool);
 
-        // Update last winner
         lottery.lastWinner = winner;
 
-        // Reset lottery
-        delete lottery.participants; // Clear participants for next round
+        delete lottery.participants;
         lottery.prizePool = 0;
         lottery.roundEndTime = block.timestamp + lottery.roundDuration;
     }
@@ -116,7 +124,7 @@ contract MultiTokenLottery {
             uint256(
                 keccak256(
                     abi.encodePacked(
-                        block.prevrandao, // Replaced block.difficulty with block.prevrandao
+                        block.prevrandao,
                         block.timestamp,
                         lottery.participants
                     )
@@ -124,6 +132,7 @@ contract MultiTokenLottery {
             );
     }
 
+    // Getter functions
     function getParticipants(
         address tokenAddress
     ) external view returns (address[] memory) {

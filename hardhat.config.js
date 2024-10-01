@@ -28,7 +28,7 @@ module.exports = {
       //   // gas: 9000000000000000
       // },
       accounts: {
-        count: 1500,
+        count: 20,
         //558, // Number of accounts
         accountsBalance: "10000000000000000000000000000", // 1B ETH in Wei
         mnemonic: process.env.MNEMONIC
