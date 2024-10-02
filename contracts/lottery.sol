@@ -22,12 +22,15 @@ contract MultiTokenLottery is Ownable(msg.sender) {
     }
 
     mapping(address => Lottery) public lotteries;
-    address public nullAddress = 0x000000000000000000000000000000000000dEaD;
     address public reserveFund;
+    uint256 public creationFee; // Fee for creating a new lottery
+    uint256 public buyFee; // Fee for buyFee a new lottery
 
-    constructor(address _reserveFund) {
+    constructor(address _reserveFund, uint256 _creationFee, uint256 _buyFee) {
         require(_reserveFund != address(0), "Invalid reserve fund address");
         reserveFund = _reserveFund;
+        creationFee = _creationFee;
+        buyFee = _buyFee;
     }
 
     // Only the owner can set the reserve fund
@@ -36,11 +39,25 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         reserveFund = _reserveFund;
     }
 
+    // Only the owner can set the lottery creation fee
+    function setBuyFee(uint256 _buyFee) external onlyOwner {
+        buyFee = _buyFee;
+    }
+
+    // Only the owner can set the lottery creation fee
+    function setCreationFee(uint256 _creationFee) external onlyOwner {
+        creationFee = _creationFee;
+    }
+
     function createLottery(
         address tokenAddress,
         uint256 duration,
         uint256 ticketPrice
-    ) external {
+    ) external payable {
+        // Ensure the creation fee is paid
+        if (msg.sender != owner()) {
+            require(msg.value >= creationFee, "Insufficient creation fee");
+        }
         // Create a new lottery for the specified token
         require(
             lotteries[tokenAddress].tokenAddress == address(0),
@@ -53,16 +70,26 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         lottery.ticketPrice = ticketPrice; // Set ticket price from input
         lottery.roundEndTime = block.timestamp + duration; // Set end time for this round
         lottery.roundDuration = duration; // Set round duration
+
+        // Transfer the creation fee to the reserve fund
+        (bool success, ) = reserveFund.call{value: msg.value}("");
+        require(success, "Failed to transfer creation fee to reserve fund");
     }
 
-    function buyTickets(address tokenAddress, uint256 quantity) external {
+    function buyTickets(
+        address tokenAddress,
+        uint256 quantity
+    ) external payable {
         require(quantity > 0, "Must buy at least one ticket");
+
+        require(msg.value >= buyFee, "Insufficient creation fee");
+
         Lottery storage lottery = lotteries[tokenAddress];
 
         require(block.timestamp < lottery.roundEndTime, "Lottery round ended");
 
         uint256 totalCost = lottery.ticketPrice * quantity;
-        require(totalCost >= lottery.ticketPrice, "Cost calculation overflow"); // Additional check
+        require(totalCost >= lottery.ticketPrice, "Cost calculation overflow");
 
         require(
             IERC20(tokenAddress).allowance(msg.sender, address(this)) >=
@@ -91,7 +118,19 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         lottery.prizePool += poolShare;
         lottery.totalBurned += burnShare;
 
-        IERC20(tokenAddress).transfer(nullAddress, burnShare);
+        // Define the null address and dead address locally
+        address nullAddress = 0x0000000000000000000000000000000000000000;
+        address deadAddress = 0x000000000000000000000000000000000000dEaD;
+
+        // Try to send tokens to the null address
+        try IERC20(tokenAddress).transfer(nullAddress, burnShare) {
+            // If successful, do nothing further
+        } catch {
+            // If transfer to null address reverts, fallback to dead address
+            IERC20(tokenAddress).transfer(deadAddress, burnShare);
+        }
+
+        // Transfer reserve share to reserve fund
         IERC20(tokenAddress).transfer(reserveFund, reserveShare);
 
         for (uint256 i = 0; i < quantity; i++) {

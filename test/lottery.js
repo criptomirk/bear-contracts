@@ -15,11 +15,12 @@ describe.only("Multi Token Lottery", function () {
     const mockFactory = await ethers.getContractFactory("MyToken");
 
     // Set signers[1] as the reserveFund
-    const lottery = await lotteryFactory.deploy(signers[1].address);
+    const creationFee = ethers.parseEther("150000")
+    const lottery = await lotteryFactory.deploy(signers[1].address, creationFee);
     const BearToken = await bearTokenFactory.deploy('BEARTOKEN', 'BEAR', signers[0]);
     const mockToken = await mockFactory.deploy();
 
-    return { lottery, signers, BearToken, mockToken };
+    return { lottery, signers, BearToken, mockToken, creationFee };
   }
 
   describe("Deployment", function () {
@@ -41,7 +42,7 @@ describe.only("Multi Token Lottery", function () {
 
   describe("Lottery Creation", function () {
     it("Should create a lottery correctly", async function () {
-      const { lottery, mockToken, signers } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
@@ -57,31 +58,31 @@ describe.only("Multi Token Lottery", function () {
     });
 
     it("Should not allow creating a lottery for the same token twice", async function () {
-      const { lottery, mockToken } = await loadFixture(deploy);
+      const { lottery, mockToken, creationFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
-      await lottery.createLottery(mockToken.target, duration, ticketPrice);
+      await lottery.createLottery(mockToken.target, duration, ticketPrice, { value: creationFee });
 
       await expect(
-        lottery.createLottery(mockToken.target, duration, ticketPrice)
+        lottery.createLottery(mockToken.target, duration, ticketPrice, { value: creationFee })
       ).to.be.revertedWith("Lottery already exists for this token");
     });
   });
 
   describe("Ticket Purchasing", function () {
     it("Should allow users to buy tickets", async function () {
-      const { lottery, mockToken, signers } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
-      const oneTicketPrice = ethers.parseUnits("1", 18); // 1 token
-      const ticketsPrice = (Number(oneTicketPrice) * 5).toString(); // buying 5
+      const ticketPrice = ethers.parseUnits("1", 18); // 1 token
+      const ticketsPrice = (Number(ticketPrice) * 5).toString(); // buying 5
 
       // Ensure lottery and mockToken are correctly deployed
       console.log(`\t\t\t\t\tLottery Contract Address: ${lottery.target}`);
       console.log(`\t\t\t\t\tBear Token Contract Address: ${mockToken.target}`);
 
       // Create the lottery
-      await lottery.createLottery(mockToken.target, duration, oneTicketPrice);
+      await lottery.createLottery(mockToken.target, duration, ticketPrice, { value: creationFee });
 
       // Log the ticket price set in the contract
       const lotteryData = await lottery.lotteries(mockToken.target);
@@ -112,16 +113,16 @@ describe.only("Multi Token Lottery", function () {
 
       // Check that the participant was added
       expect(participants.length).to.equal(5); // Check that 5 participants are added
-      expect(updatedLotteryData.prizePool).to.equal((Number(oneTicketPrice) * 2).toString()); // 50% goes to the prize pool
-      expect(updatedLotteryData.totalBurned).to.equal((Number(oneTicketPrice) * 2).toString()); // 50% goes to burning
+      expect(updatedLotteryData.prizePool).to.equal((Number(ticketPrice) * 2).toString()); // 50% goes to the prize pool
+      expect(updatedLotteryData.totalBurned).to.equal((Number(ticketPrice) * 2).toString()); // 50% goes to burning
     });
 
     it("Should revert if not enough tokens are approved", async function () {
-      const { lottery, mockToken, signers } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
-      await lottery.createLottery(mockToken.target, duration, ticketPrice);
+      await lottery.createLottery(mockToken.target, duration, ticketPrice, { value: creationFee });
 
       // Transfer tokens to the buyer (signers[2]) for purchasing tickets
       await mockToken.transfer(signers[2].address, ticketPrice); // Transfer only 1 token
@@ -139,12 +140,12 @@ describe.only("Multi Token Lottery", function () {
   describe("Draw Winner", function () {
     this.timeout(600000);
     it("Should draw a winner and balance should match prize pool", async function () {
-      const { lottery, mockToken, signers } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
       // Create the lottery
-      await lottery.createLottery(mockToken.target, duration, ticketPrice);
+      await lottery.createLottery(mockToken.target, duration, ticketPrice, { value: creationFee });
 
       // Transfer tokens and approve
       const totalTickets = ethers.parseUnits("5", 18); // 5 tickets
@@ -190,12 +191,12 @@ describe.only("Multi Token Lottery", function () {
     });
 
     it("Should handle 100 participants correctly", async function () {
-      const { lottery, mockToken, signers } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
       // Create the lottery
-      await lottery.createLottery(mockToken.target, duration, ticketPrice);
+      await lottery.createLottery(mockToken.target, duration, ticketPrice, { value: creationFee });
 
       const lotteryDataBefore = await lottery.lotteries(mockToken.target);
       const prizePoolBefore = lotteryDataBefore.prizePool;
