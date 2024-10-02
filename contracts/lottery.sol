@@ -15,31 +15,27 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         uint256 ticketPrice;
         uint256 roundEndTime;
         uint256 roundDuration;
-        address[] participants; // Define participants as an array of addresses
+        address[] participants; // Array of participants
         address lastWinner;
         uint256 prizePool;
         uint256 totalBurned; // Total burned tokens for this lottery
+        uint256 buyFeePool; // Accumulated 50% of buyFee for this lottery round
     }
 
     mapping(address => Lottery) public lotteries;
     address public reserveFund;
-    uint256 public creationFee; // Fee for creating a new lottery
+    uint256 public constant creationFee = 200_000 ether; // Creation fee as a constant
+    uint256 public constant buyFee = 10_000 ether; // Buy fee as a constant
 
-    constructor(address _reserveFund, uint256 _creationFee) {
+    constructor(address _reserveFund) {
         require(_reserveFund != address(0), "Invalid reserve fund address");
         reserveFund = _reserveFund;
-        creationFee = _creationFee;
     }
 
     // Only the owner can set the reserve fund
     function setReserveFund(address _reserveFund) external onlyOwner {
         require(_reserveFund != address(0), "Invalid reserve fund address");
         reserveFund = _reserveFund;
-    }
-
-    // Only the owner can set the lottery creation fee
-    function setCreationFee(uint256 _creationFee) external onlyOwner {
-        creationFee = _creationFee;
     }
 
     function createLottery(
@@ -51,6 +47,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         if (msg.sender != owner()) {
             require(msg.value >= creationFee, "Insufficient creation fee");
         }
+
         // Create a new lottery for the specified token
         require(
             lotteries[tokenAddress].tokenAddress == address(0),
@@ -69,8 +66,14 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         require(success, "Failed to transfer creation fee to reserve fund");
     }
 
-    function buyTickets(address tokenAddress, uint256 quantity) external {
+    function buyTickets(
+        address tokenAddress,
+        uint256 quantity
+    ) external payable {
         require(quantity > 0, "Must buy at least one ticket");
+
+        require(msg.value >= buyFee, "Insufficient buy fee");
+
         Lottery storage lottery = lotteries[tokenAddress];
 
         require(block.timestamp < lottery.roundEndTime, "Lottery round ended");
@@ -97,13 +100,14 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             "Ticket purchase failed"
         );
 
-        // 40% to pool, 40% to burn, 20% to reserve fund
+        // 40% to pool, 40% to burn, 20% to reserve fund, 50% of buyFee remains for winner
         uint256 poolShare = (totalCost * 40) / 100;
         uint256 burnShare = (totalCost * 40) / 100;
         uint256 reserveShare = (totalCost * 20) / 100;
 
         lottery.prizePool += poolShare;
         lottery.totalBurned += burnShare;
+        lottery.buyFeePool += buyFee;
 
         // Define the null address and dead address locally
         address nullAddress = 0x0000000000000000000000000000000000000000;
@@ -135,12 +139,29 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             lottery.participants.length;
         address winner = lottery.participants[winnerIndex];
 
-        IERC20(tokenAddress).transfer(winner, lottery.prizePool);
+        uint256 buyFeePrize = lottery.buyFeePool / 2; // 50% of the buyFeePool
+        uint256 tokenPrize = lottery.prizePool; // Total prize from the prize pool (ERC20 tokens)
+
+        // Transfer the prize pool (ERC20 tokens) to the winner
+        require(
+            IERC20(tokenAddress).transfer(winner, tokenPrize),
+            "Transfer to winner failed"
+        );
+
+        // Transfer half of the buyFeePool in Ether to the winner
+        (bool sentToWinner, ) = winner.call{value: buyFeePrize}("");
+        require(sentToWinner, "Transfer to winner failed");
+
+        // Transfer the other half of the buyFeePool in Ether to the reserve fund
+        (bool sentToReserve, ) = reserveFund.call{value: buyFeePrize}("");
+        require(sentToReserve, "Transfer to reserve fund failed");
 
         lottery.lastWinner = winner;
 
+        // Reset the lottery for the next round
         delete lottery.participants;
         lottery.prizePool = 0;
+        lottery.buyFeePool = 0; // Reset buy fee pool after winner is drawn
         lottery.roundEndTime = block.timestamp + lottery.roundDuration;
     }
 

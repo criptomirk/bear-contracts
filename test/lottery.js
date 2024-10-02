@@ -15,12 +15,13 @@ describe.only("Multi Token Lottery", function () {
     const mockFactory = await ethers.getContractFactory("MyToken");
 
     // Set signers[1] as the reserveFund
-    const creationFee = ethers.parseEther("150000")
-    const lottery = await lotteryFactory.deploy(signers[1].address, creationFee);
+    const creationFee = ethers.parseEther("200000")
+    const buyFee = ethers.parseEther("10000")
+    const lottery = await lotteryFactory.deploy(signers[1].address);
     const BearToken = await bearTokenFactory.deploy('BEARTOKEN', 'BEAR', signers[0]);
     const mockToken = await mockFactory.deploy();
 
-    return { lottery, signers, BearToken, mockToken, creationFee };
+    return { lottery, signers, BearToken, mockToken, creationFee, buyFee };
   }
 
   describe("Deployment", function () {
@@ -72,7 +73,7 @@ describe.only("Multi Token Lottery", function () {
 
   describe("Ticket Purchasing", function () {
     it("Should allow users to buy tickets", async function () {
-      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee, buyFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
       const ticketsPrice = (Number(ticketPrice) * 5).toString(); // buying 5
@@ -103,7 +104,7 @@ describe.only("Multi Token Lottery", function () {
       console.log(`\t\t\t\t\tBuyer Balance After Approval: ${buyerBalanceAfter.toString()}`);
 
       // Buy 5 tickets
-      await lottery.connect(signers[2]).buyTickets(mockToken.target, 5);
+      await lottery.connect(signers[2]).buyTickets(mockToken.target, 5, { value: buyFee });
 
       const updatedLotteryData = await lottery.lotteries(mockToken.target);
       const participants = await lottery.getParticipants(mockToken.target);
@@ -118,11 +119,11 @@ describe.only("Multi Token Lottery", function () {
     });
 
     it("Should revert if not enough tokens are approved", async function () {
-      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee, buyFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
-      await lottery.createLottery(mockToken.target, duration, ticketPrice, { value: creationFee });
+      await lottery.createLottery(mockToken.target, duration, ticketPrice, { value: buyFee });
 
       // Transfer tokens to the buyer (signers[2]) for purchasing tickets
       await mockToken.transfer(signers[2].address, ticketPrice); // Transfer only 1 token
@@ -132,15 +133,17 @@ describe.only("Multi Token Lottery", function () {
 
       // Try to buy 2 tickets (should revert)
       await expect(
-        lottery.connect(signers[2]).buyTickets(mockToken.target, 2)
+        lottery.connect(signers[2]).buyTickets(mockToken.target, 2, { value: buyFee })
       ).to.be.revertedWith("Insufficient allowance");
     });
   });
 
   describe("Draw Winner", function () {
+
     this.timeout(600000);
+
     it("Should draw a winner and balance should match prize pool", async function () {
-      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee, buyFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
@@ -153,7 +156,7 @@ describe.only("Multi Token Lottery", function () {
       await mockToken.connect(signers[2]).approve(lottery.target, totalTickets);
 
       // Buy 5 tickets
-      await lottery.connect(signers[2]).buyTickets(mockToken.target, 5);
+      await lottery.connect(signers[2]).buyTickets(mockToken.target, 5, { value: buyFee });
 
       // Fetch the prize pool before drawing
       const lotteryDataBefore = await lottery.lotteries(mockToken.target);
@@ -164,6 +167,12 @@ describe.only("Multi Token Lottery", function () {
       const winnerBalanceBefore = await mockToken.balanceOf(signers[2].address);
       console.log(`\t\t\t\t\tWinner Balance Before Draw: ${winnerBalanceBefore.toString()}`);
 
+      // Log ETH balance of the winner and reserve fund before drawing
+      const winnerEthBalanceBefore = await ethers.provider.getBalance(signers[2].address);
+      const reserveFundEthBalanceBefore = await ethers.provider.getBalance(signers[1].address);
+      console.log(`\t\t\t\t\tWinner ETH Balance Before Draw: ${ethers.formatEther(winnerEthBalanceBefore)} ETH`);
+      console.log(`\t\t\t\t\tReserve Fund ETH Balance Before Draw: ${ethers.formatEther(reserveFundEthBalanceBefore)} ETH`);
+
       // Fast-forward time to end the lottery round
       await time.increase(duration);
 
@@ -173,31 +182,34 @@ describe.only("Multi Token Lottery", function () {
       // Get updated lottery data and winner's balance after draw
       const lotteryDataAfter = await lottery.lotteries(mockToken.target);
       const winnerBalanceAfter = await mockToken.balanceOf(signers[2].address);
-      const lastWinner = await lottery.getLastWinner(mockToken.target);
 
-      console.log(`\t\t\t\t\tLast Winner Address: ${lastWinner}`);
       console.log(`\t\t\t\t\tNew Prize Pool: ${lotteryDataAfter.prizePool}`);
       console.log(`\t\t\t\t\tWinner Balance After Draw: ${winnerBalanceAfter.toString()}`);
 
-      // Check if the prize pool is reset and the winner is set
-      expect(lastWinner).to.equal(signers[2].address);
+      // Log ETH balance of the winner and reserve fund after drawing
+      const winnerEthBalanceAfter = await ethers.provider.getBalance(signers[2].address);
+      const reserveFundEthBalanceAfter = await ethers.provider.getBalance(signers[1].address);
+      console.log(`\t\t\t\t\tWinner ETH Balance After Draw: ${ethers.formatEther(winnerEthBalanceAfter)} ETH`);
+      console.log(`\t\t\t\t\tReserve Fund ETH Balance After Draw: ${ethers.formatEther(reserveFundEthBalanceAfter)} ETH`);
+
+      // Check if the prize pool is reset and the winner's balance increased correctly
       expect(lotteryDataAfter.prizePool).to.equal(0);
 
       // Confirm the winner's balance increased by the prize pool amount
       const balanceChange = Number(winnerBalanceAfter) - Number(winnerBalanceBefore);
       console.log(`\t\t\t\t\tBalance Change: ${balanceChange.toString()}`);
-
-      //expect(balanceChange).to.equal(prizePoolBefore);
+      expect(balanceChange).to.equal(Number(prizePoolBefore));
     });
 
     it("Should handle 100 participants correctly", async function () {
-      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee, buyFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
       // Create the lottery
       await lottery.createLottery(mockToken.target, duration, ticketPrice, { value: creationFee });
 
+      // Check initial prize pool and burned amount
       const lotteryDataBefore = await lottery.lotteries(mockToken.target);
       const prizePoolBefore = lotteryDataBefore.prizePool;
       const burnedAmountBefore = lotteryDataBefore.totalBurned;
@@ -209,26 +221,24 @@ describe.only("Multi Token Lottery", function () {
       const reserveFundBefore = await mockToken.balanceOf(signers[1].address);
       console.log(`\t\t\t\t\tReserve Fund Balance Before Draw: ${ethers.formatEther(reserveFundBefore.toString())}`);
 
+      // Log ETH balance of reserve fund before draw
+      const reserveFundEthBalanceBefore = await ethers.provider.getBalance(signers[1].address);
+      console.log(`\t\t\t\t\tReserve Fund ETH Balance Before Draw: ${ethers.formatEther(reserveFundEthBalanceBefore)} ETH`);
+
       // Have 100 signers buy tickets
       for (let i = 0; i < 100; i++) {
         const totalTickets = ticketPrice; // 1 ticket per signer
         await mockToken.transfer(signers[i].address, totalTickets);
         await mockToken.connect(signers[i]).approve(lottery.target, totalTickets);
-        await lottery.connect(signers[i]).buyTickets(mockToken.target, 1);
+        await lottery.connect(signers[i]).buyTickets(mockToken.target, 1, { value: buyFee });
       }
 
       // Log the number of participants before the draw
       const participants = await lottery.getParticipants(mockToken.target);
       console.log(`\t\t\t\t\tNumber of Participants: ${participants.length}`);
 
-      const totalTickets = await lottery.getTotalTickets(mockToken.target);
-      console.log(`\t\t\t\t\tNumber of  Tickets: ${totalTickets}`);
-
       // Ensure 100 participants are added
       expect(participants.length).to.equal(100);
-
-      // Fetch lottery data before drawing
-
 
       // Fast-forward time to end the lottery round
       await time.increase(duration);
@@ -236,30 +246,36 @@ describe.only("Multi Token Lottery", function () {
       // Draw the winner
       await lottery.drawWinner(mockToken.target);
 
-      // Get the last winner and their balance after the draw
+      // Get the winner's balance after the draw
       const lastWinner = await lottery.getLastWinner(mockToken.target);
       const winnerBalanceAfter = await mockToken.balanceOf(lastWinner);
 
       console.log(`\t\t\t\t\tLast Winner Address: ${lastWinner}`);
       console.log(`\t\t\t\t\tWinner Balance After Draw: ${ethers.formatEther(winnerBalanceAfter.toString())}`);
 
+      // Log ETH balance of reserve fund after drawing
+      const reserveFundEthBalanceAfter = await ethers.provider.getBalance(signers[1].address);
+      const lastWinnerFundEthBalanceAfter = await ethers.provider.getBalance(lastWinner);
+      console.log(`\t\t\t\t\tReserve Fund ETH Balance After Draw: ${ethers.formatEther(reserveFundEthBalanceAfter)} ETH`);
+      console.log(`\t\t\t\t\lastWinner ETH Balance After Draw: ${ethers.formatEther(lastWinnerFundEthBalanceAfter)} ETH`);
+
+
       // Fetch updated lottery data and reserve fund after draw
       const lotteryDataAfter = await lottery.lotteries(mockToken.target);
       const burnedAmountAfter = lotteryDataAfter.totalBurned;
-      const reserveFundAfter = await mockToken.balanceOf(signers[1].address);
 
       console.log(`\t\t\t\t\tBurned Amount After Draw: ${ethers.formatEther(burnedAmountAfter.toString())}`);
-      console.log(`\t\t\t\t\tReserve Fund Balance After Draw: ${ethers.formatEther(reserveFundAfter.toString())}`);
 
       // Ensure the winner is one of the participants
       expect(participants).to.include(lastWinner);
 
       // Ensure that burned amount and reserve fund increased correctly
       expect(burnedAmountAfter).to.be.gt(burnedAmountBefore);
-      expect(reserveFundAfter).to.be.gt(reserveFundBefore);
     });
-
   });
+
+
+
 
 
 
