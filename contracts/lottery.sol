@@ -24,24 +24,17 @@ contract MultiTokenLottery is Ownable(msg.sender) {
     mapping(address => Lottery) public lotteries;
     address public reserveFund;
     uint256 public creationFee; // Fee for creating a new lottery
-    uint256 public buyFee; // Fee for buyFee a new lottery
 
-    constructor(address _reserveFund, uint256 _creationFee, uint256 _buyFee) {
+    constructor(address _reserveFund, uint256 _creationFee) {
         require(_reserveFund != address(0), "Invalid reserve fund address");
         reserveFund = _reserveFund;
         creationFee = _creationFee;
-        buyFee = _buyFee;
     }
 
     // Only the owner can set the reserve fund
     function setReserveFund(address _reserveFund) external onlyOwner {
         require(_reserveFund != address(0), "Invalid reserve fund address");
         reserveFund = _reserveFund;
-    }
-
-    // Only the owner can set the lottery creation fee
-    function setBuyFee(uint256 _buyFee) external onlyOwner {
-        buyFee = _buyFee;
     }
 
     // Only the owner can set the lottery creation fee
@@ -76,14 +69,8 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         require(success, "Failed to transfer creation fee to reserve fund");
     }
 
-    function buyTickets(
-        address tokenAddress,
-        uint256 quantity
-    ) external payable {
+    function buyTickets(address tokenAddress, uint256 quantity) external {
         require(quantity > 0, "Must buy at least one ticket");
-
-        require(msg.value >= buyFee, "Insufficient creation fee");
-
         Lottery storage lottery = lotteries[tokenAddress];
 
         require(block.timestamp < lottery.roundEndTime, "Lottery round ended");
