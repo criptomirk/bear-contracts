@@ -15,20 +15,20 @@ task("printAddresses", "Prints the addresses of multiple accounts")
 module.exports = {
   networks: {
     hardhat: {
-      // forking: {
-      //   url: process.env.PLSMAIN,
-      //   // allowUnlimitedContractSize: true,
-      //   // timeout: 90000,
-      //   blockNumber: 21327087
-      //   //blockNumber: 20570836
-      //   //blockNumber: 20969107
+      forking: {
+        url: process.env.PLSMAIN,
+        // allowUnlimitedContractSize: true,
+        // timeout: 90000,
+        blockNumber: 21327087
+        //blockNumber: 20570836
+        //blockNumber: 20969107
 
 
-      //   // chainId: 1,
-      //   // gas: 9000000000000000
-      // },
+        // chainId: 1,
+        // gas: 9000000000000000
+      },
       accounts: {
-        count: 20,
+        count: 150,
         //558, // Number of accounts
         accountsBalance: "10000000000000000000000000000", // 1B ETH in Wei
         mnemonic: process.env.MNEMONIC
