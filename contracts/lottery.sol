@@ -20,11 +20,15 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         uint256 prizePool;
         uint256 totalBurned; // Total burned tokens for this lottery
         uint256 buyFeePool; // Accumulated 50% of buyFee for this lottery round
+        address reserveReceiver; // Custom reserve fund receiver for this lottery
     }
 
-    mapping(address => Lottery) public lotteries;
-    address public reserveFund;
-    uint256 public constant creationFee = 200_000 ether; // Creation fee as a constant
+    address[] lotteryTokens;
+    mapping(address => mapping(uint256 => Lottery)) public lotteries; // Supports multiple lotteries for each token
+    mapping(address => uint256) public lotteryCount; // Track the number of lotteries for each token
+
+    address public reserveFund; // The main reserve fund set by the contract owner
+    uint256 public creationFee = 200_000 ether; // Creation fee as a constant
     uint256 public constant buyFee = 10_000 ether; // Buy fee as a constant
 
     constructor(address _reserveFund) {
@@ -32,55 +36,65 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         reserveFund = _reserveFund;
     }
 
-    // Only the owner can set the reserve fund
+    // Only the owner can set the main reserve fund
     function setReserveFund(address _reserveFund) external onlyOwner {
         require(_reserveFund != address(0), "Invalid reserve fund address");
         reserveFund = _reserveFund;
     }
 
+    // Function to set the creation fee (only callable by the owner)
+    function setCreationFee(uint256 _newCreationFee) external onlyOwner {
+        require(_newCreationFee > 0, "Creation fee must be greater than zero");
+        creationFee = _newCreationFee;
+    }
+
     function createLottery(
         address tokenAddress,
         uint256 duration,
-        uint256 ticketPrice
+        uint256 ticketPrice,
+        address _reserveReceiver
     ) external payable {
         // Ensure the creation fee is paid
         if (msg.sender != owner()) {
             require(msg.value >= creationFee, "Insufficient creation fee");
         }
 
-        // Create a new lottery for the specified token
-        require(
-            lotteries[tokenAddress].tokenAddress == address(0),
-            "Lottery already exists for this token"
-        );
+        uint256 currentLotteryId = lotteryCount[tokenAddress]++;
+        Lottery storage lottery = lotteries[tokenAddress][currentLotteryId];
 
-        Lottery storage lottery = lotteries[tokenAddress]; // Create a reference to the lottery
+        lottery.tokenAddress = tokenAddress;
+        lottery.ticketPrice = ticketPrice;
+        lottery.roundEndTime = block.timestamp + duration;
+        lottery.roundDuration = duration;
 
-        lottery.tokenAddress = tokenAddress; // Set token address
-        lottery.ticketPrice = ticketPrice; // Set ticket price from input
-        lottery.roundEndTime = block.timestamp + duration; // Set end time for this round
-        lottery.roundDuration = duration; // Set round duration
+        // Set custom reserve fund receiver for this lottery
+        lottery.reserveReceiver = _reserveReceiver != address(0)
+            ? _reserveReceiver
+            : reserveFund;
 
-        // Transfer the creation fee to the reserve fund
+        // Add tokenAddress to lotteryTokens if it's a new token
+        if (lotteryCount[tokenAddress] == 1) {
+            lotteryTokens.push(tokenAddress);
+        }
+
+        // Transfer the creation fee to the main reserve fund
         (bool success, ) = reserveFund.call{value: msg.value}("");
         require(success, "Failed to transfer creation fee to reserve fund");
     }
 
     function buyTickets(
         address tokenAddress,
+        uint256 lotteryId,
         uint256 quantity
     ) external payable {
         require(quantity > 0, "Must buy at least one ticket");
-
         require(msg.value >= buyFee, "Insufficient buy fee");
 
-        Lottery storage lottery = lotteries[tokenAddress];
-
+        Lottery storage lottery = lotteries[tokenAddress][lotteryId];
         require(block.timestamp < lottery.roundEndTime, "Lottery round ended");
 
         uint256 totalCost = lottery.ticketPrice * quantity;
         require(totalCost >= lottery.ticketPrice, "Cost calculation overflow");
-
         require(
             IERC20(tokenAddress).allowance(msg.sender, address(this)) >=
                 totalCost,
@@ -100,7 +114,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             "Ticket purchase failed"
         );
 
-        // 40% to pool, 40% to burn, 20% to reserve fund, 50% of buyFee remains for winner
+        // 40% to pool, 40% to burn, 20% to reserveReceiver, buyFee goes to main reserve fund
         uint256 poolShare = (totalCost * 40) / 100;
         uint256 burnShare = (totalCost * 40) / 100;
         uint256 reserveShare = (totalCost * 20) / 100;
@@ -109,38 +123,41 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         lottery.totalBurned += burnShare;
         lottery.buyFeePool += buyFee;
 
-        // Define the null address and dead address locally
         address nullAddress = 0x0000000000000000000000000000000000000000;
         address deadAddress = 0x000000000000000000000000000000000000dEaD;
 
-        // Try to send tokens to the null address
         try IERC20(tokenAddress).transfer(nullAddress, burnShare) {
-            // If successful, do nothing further
+            // Do nothing
         } catch {
-            // If transfer to null address reverts, fallback to dead address
             IERC20(tokenAddress).transfer(deadAddress, burnShare);
         }
 
-        // Transfer reserve share to reserve fund
-        IERC20(tokenAddress).transfer(reserveFund, reserveShare);
+        // Transfer reserve share to custom reserveReceiver
+        IERC20(tokenAddress).transfer(lottery.reserveReceiver, reserveShare);
+
+        // Transfer the buyFee to the main reserve fund
+        (bool sentToMainReserve, ) = reserveFund.call{value: buyFee}("");
+        require(
+            sentToMainReserve,
+            "Failed to transfer buyFee to main reserve fund"
+        );
 
         for (uint256 i = 0; i < quantity; i++) {
             lottery.participants.push(msg.sender);
         }
     }
 
-    function drawWinner(address tokenAddress) external {
-        Lottery storage lottery = lotteries[tokenAddress];
+    function drawWinner(address tokenAddress, uint lotteryId) external {
+        Lottery storage lottery = lotteries[tokenAddress][lotteryId];
 
         require(block.timestamp >= lottery.roundEndTime, "Round not yet ended");
         require(lottery.participants.length > 0, "No participants");
 
-        uint256 winnerIndex = random(tokenAddress) %
+        uint256 winnerIndex = random(tokenAddress, lotteryId) %
             lottery.participants.length;
         address winner = lottery.participants[winnerIndex];
 
-        uint256 buyFeePrize = lottery.buyFeePool / 2; // 50% of the buyFeePool
-        uint256 tokenPrize = lottery.prizePool; // Total prize from the prize pool (ERC20 tokens)
+        uint256 tokenPrize = lottery.prizePool;
 
         // Transfer the prize pool (ERC20 tokens) to the winner
         require(
@@ -148,25 +165,14 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             "Transfer to winner failed"
         );
 
-        // Transfer half of the buyFeePool in Ether to the winner
-        (bool sentToWinner, ) = winner.call{value: buyFeePrize}("");
-        require(sentToWinner, "Transfer to winner failed");
-
-        // Transfer the other half of the buyFeePool in Ether to the reserve fund
-        (bool sentToReserve, ) = reserveFund.call{value: buyFeePrize}("");
-        require(sentToReserve, "Transfer to reserve fund failed");
-
         lottery.lastWinner = winner;
-
-        // Reset the lottery for the next round
-        delete lottery.participants;
-        lottery.prizePool = 0;
-        lottery.buyFeePool = 0; // Reset buy fee pool after winner is drawn
-        lottery.roundEndTime = block.timestamp + lottery.roundDuration;
     }
 
-    function random(address tokenAddress) private view returns (uint256) {
-        Lottery storage lottery = lotteries[tokenAddress];
+    function random(
+        address tokenAddress,
+        uint lotteryId
+    ) private view returns (uint256 index) {
+        Lottery storage lottery = lotteries[tokenAddress][lotteryId];
         return
             uint256(
                 keccak256(
@@ -179,34 +185,76 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             );
     }
 
-    // Getter functions
-    function getParticipants(
-        address tokenAddress
-    ) external view returns (address[] memory) {
-        return lotteries[tokenAddress].participants;
+    function getLotteryData(
+        address _tokenAddress,
+        uint256 lotteryId
+    )
+        external
+        view
+        returns (
+            address tokenAddress,
+            uint256 ticketPrice,
+            uint256 roundEndTime,
+            uint256 roundDuration,
+            address[] memory participants,
+            address lastWinner,
+            uint256 prizePool,
+            uint256 totalBurned,
+            uint256 buyFeePool,
+            address reserveReceiver
+        )
+    {
+        Lottery storage lottery = lotteries[_tokenAddress][lotteryId];
+
+        return (
+            lottery.tokenAddress,
+            lottery.ticketPrice,
+            lottery.roundEndTime,
+            lottery.roundDuration,
+            lottery.participants,
+            lottery.lastWinner,
+            lottery.prizePool,
+            lottery.totalBurned,
+            lottery.buyFeePool,
+            lottery.reserveReceiver
+        );
     }
 
-    function getTimeLeft(address tokenAddress) external view returns (uint256) {
-        Lottery storage lottery = lotteries[tokenAddress];
+    // Getter functions
+    function getParticipants(
+        address tokenAddress,
+        uint lotteryId
+    ) external view returns (address[] memory) {
+        return lotteries[tokenAddress][lotteryId].participants;
+    }
+
+    function getTimeLeft(
+        address tokenAddress,
+        uint lotteryId
+    ) external view returns (uint256) {
+        Lottery storage lottery = lotteries[tokenAddress][lotteryId];
         if (block.timestamp >= lottery.roundEndTime) return 0;
         return lottery.roundEndTime - block.timestamp;
     }
 
     function getTotalTickets(
-        address tokenAddress
+        address tokenAddress,
+        uint lotteryId
     ) external view returns (uint256) {
-        return lotteries[tokenAddress].participants.length;
+        return lotteries[tokenAddress][lotteryId].participants.length;
     }
 
     function getTotalBurned(
-        address tokenAddress
+        address tokenAddress,
+        uint lotteryId
     ) external view returns (uint256) {
-        return lotteries[tokenAddress].totalBurned;
+        return lotteries[tokenAddress][lotteryId].totalBurned;
     }
 
     function getLastWinner(
-        address tokenAddress
+        address tokenAddress,
+        uint lotteryId
     ) external view returns (address) {
-        return lotteries[tokenAddress].lastWinner;
+        return lotteries[tokenAddress][lotteryId].lastWinner;
     }
 }
