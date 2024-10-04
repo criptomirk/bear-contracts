@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 contract MultiTokenLottery is Ownable(msg.sender) {
     struct Lottery {
         address tokenAddress;
+        string tokenSymbol;
         uint256 ticketPrice;
         uint256 roundEndTime;
         uint256 roundDuration;
@@ -16,13 +17,15 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         uint256 totalBurned; // Total burned tokens for this lottery
         uint256 buyFeePool; // Accumulated 50% of buyFee for this lottery round
         address reserveReceiver; // Custom reserve fund receiver for this lottery
+        bool isActive; // Flag to track if the lottery is active or ended
     }
 
     uint256 public lotteryCounter; // Incremental ID for all lotteries
     address[] public lotteryTokens; // Track tokens that have associated lotteries
     mapping(uint256 => Lottery) public lotteries; // Mapping for lotteryId => Lottery
     mapping(address => uint256[]) public lotteriesByCreator; // Track lotteries created by each address
-    mapping(address => uint256[]) public lotteriesByToken; // Track lotteries created by each address
+    mapping(address => uint256[]) public lotteriesByTokenAddress; // Track lotteries by token address
+    mapping(string => uint256[]) public lotteriesByTokenSymbol; // Track lotteries by token symbol
     uint256[] public allLotteries; // Optional: Array to track all lotteries created
 
     address public reserveFund; // Main reserve fund set by the contract owner
@@ -57,13 +60,18 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             require(msg.value >= creationFee, "Insufficient creation fee");
         }
 
+        // Fetch the token symbol using IERC20 interface
+        string memory tokenSymbol = IERC20(tokenAddress).symbol();
+
         uint256 lotteryId = lotteryCounter++; // Increment lottery ID for new lottery
         Lottery storage lottery = lotteries[lotteryId];
 
         lottery.tokenAddress = tokenAddress;
+        lottery.tokenSymbol = tokenSymbol;
         lottery.ticketPrice = ticketPrice;
         lottery.roundEndTime = block.timestamp + duration;
         lottery.roundDuration = duration;
+        lottery.isActive = true; // Mark the lottery as active
 
         // Set custom reserve fund receiver for this lottery or default to main reserve
         lottery.reserveReceiver = _reserveReceiver != address(0)
@@ -71,14 +79,15 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             : reserveFund;
 
         // Add tokenAddress to lotteryTokens if this is the first lottery for the token
-        if (lotteriesByToken[tokenAddress].length == 0) {
+        if (lotteriesByTokenAddress[tokenAddress].length == 0) {
             lotteryTokens.push(tokenAddress);
         }
 
-        // Push lotteryId to the list of lotteries created by the sender
-        // and  lotteryId to the global list for easy retrieval
+        // Push lotteryId to the list of lotteries created by the sender,
+        // and lotteryId to the global list for easy retrieval.
         lotteriesByCreator[msg.sender].push(lotteryId);
-        lotteriesByToken[tokenAddress].push(lotteryId);
+        lotteriesByTokenAddress[tokenAddress].push(lotteryId);
+        lotteriesByTokenSymbol[tokenSymbol].push(lotteryId);
         allLotteries.push(lotteryId);
 
         // Transfer the creation fee to the main reserve fund
@@ -92,6 +101,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
 
         Lottery storage lottery = lotteries[lotteryId];
         require(block.timestamp < lottery.roundEndTime, "Lottery round ended");
+        require(lottery.isActive, "Lottery is not active");
 
         uint256 totalCost = lottery.ticketPrice * quantity;
         require(totalCost >= lottery.ticketPrice, "Cost calculation overflow");
@@ -167,6 +177,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         );
 
         lottery.lastWinner = winner;
+        lottery.isActive = false; // Mark the lottery as ended
     }
 
     function random(uint256 lotteryId) private view returns (uint256) {
@@ -197,6 +208,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         view
         returns (
             address tokenAddress,
+            string memory tokenSymbol,
             uint256 ticketPrice,
             uint256 roundEndTime,
             uint256 roundDuration,
@@ -205,13 +217,15 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             uint256 prizePool,
             uint256 totalBurned,
             uint256 buyFeePool,
-            address reserveReceiver
+            address reserveReceiver,
+            bool isActive // Return the lottery's active status
         )
     {
         Lottery storage lottery = lotteries[lotteryId];
 
         return (
             lottery.tokenAddress,
+            lottery.tokenSymbol,
             lottery.ticketPrice,
             lottery.roundEndTime,
             lottery.roundDuration,
@@ -220,7 +234,8 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             lottery.prizePool,
             lottery.totalBurned,
             lottery.buyFeePool,
-            lottery.reserveReceiver
+            lottery.reserveReceiver,
+            lottery.isActive // Include the active status
         );
     }
 
@@ -231,11 +246,18 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         return lotteriesByCreator[creator];
     }
 
-    // Get all lotteries created by an address
-    function getLotteriesByToken(
+    // Get lotteries by token address
+    function getLotteriesByTokenAddress(
         address tokenAddress
     ) external view returns (uint256[] memory) {
-        return lotteriesByToken[tokenAddress];
+        return lotteriesByTokenAddress[tokenAddress];
+    }
+
+    // Get lotteries by token symbol
+    function getLotteriesByTokenSymbol(
+        string memory tokenSymbol
+    ) external view returns (uint256[] memory) {
+        return lotteriesByTokenSymbol[tokenSymbol];
     }
 
     // Optional: Get all lotteries

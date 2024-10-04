@@ -6,28 +6,35 @@
 // global scope, and execute the script.
 const hre = require("hardhat");
 
-async function main() {
-  const currentTimestampInSeconds = Math.round(Date.now() / 1000);
-  const unlockTime = currentTimestampInSeconds + 60;
+async function deploy() {
+  // Contracts are deployed using the first signer/account by default
+  const signers = await ethers.getSigners();
 
-  const lockedAmount = hre.ethers.parseEther("0.001");
+  const lotteryFactory = await ethers.getContractFactory("MultiTokenLottery");
+  const bearTokenFactory = await ethers.getContractFactory("FuckTheBears");
+  const mockFactory = await ethers.getContractFactory("MyToken");
 
-  const lock = await hre.ethers.deployContract("Lock", [unlockTime], {
-    value: lockedAmount,
-  });
+  // Set signers[1] as the reserveFund
+  const creationFee = ethers.parseEther("200000");
+  const buyFee = ethers.parseEther("10000");
 
-  await lock.waitForDeployment();
+  const lottery = await lotteryFactory.deploy(signers[1].address);
+  console.log("MultiTokenLottery deployed to:", lottery.target);
+  console.log("Reserve fund address (signer[1]):", signers[1].address);
 
-  console.log(
-    `Lock with ${ethers.formatEther(
-      lockedAmount
-    )}ETH and unlock timestamp ${unlockTime} deployed to ${lock.target}`
-  );
+  const sBurn = await mockFactory.deploy('Super Burn', 'sBURN', ethers.parseEther('10000000'));
+  console.log("Super Burn Token deployed to:", sBurn.target);
+
+  const FUCK = await mockFactory.deploy('Fuck Token', '$FUCK', ethers.parseEther('10000000'));
+  console.log("Fuck Token deployed to:", FUCK.target);
+
+  const mockToken = await mockFactory.deploy('Pulse Burn', 'BURN', ethers.parseEther('10000000'));
+  console.log("Pulse Burn Token deployed to:", mockToken.target);
 }
 
 // We recommend this pattern to be able to use async/await everywhere
 // and properly handle errors.
-main().catch((error) => {
+deploy().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });

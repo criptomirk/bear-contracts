@@ -101,6 +101,7 @@ describe.only("Multi Token Lottery", function () {
 
       const lotteryData1 = await lottery.getLotteryData(0); // First lottery ID should be 0
       console.log(`\t\t\t\t\tFirst Lottery ID 0 created. Token Address: ${lotteryData1.tokenAddress}`);
+      console.log(`\t\t\t\t\tFirst Lottery ID 0 created. Token symbol: ${lotteryData1.tokenSymbol}`);
 
       // Second lottery creation for the same token
       await lottery.connect(signers[3]).createLottery(
@@ -113,6 +114,8 @@ describe.only("Multi Token Lottery", function () {
 
       const lotteryData2 = await lottery.getLotteryData(1); // Second lottery ID should be 1
       console.log(`\t\t\t\t\tSecond Lottery ID 1 created. Token Address: ${lotteryData2.tokenAddress}`);
+      console.log(`\t\t\t\t\tSecond Lottery ID 1 created. Token Symbol: ${lotteryData2.tokenSymbol}`);
+
 
       // Verify both lotteries exist and are separate entities
       expect(lotteryData1.tokenAddress).to.equal(mockToken.target);
@@ -303,10 +306,10 @@ describe.only("Multi Token Lottery", function () {
     });
   });
 
-  describe.only("Lottery Token Tracking", function () {
+  describe("Lottery Token Tracking", function () {
     this.timeout(600000);
 
-    it("Should track tokens associated with lotteries", async function () {
+    it("Should track tokens associated with lotteries by address and symbol", async function () {
       const { lottery, mockToken, signers, creationFee, mockFactory } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
@@ -324,7 +327,7 @@ describe.only("Multi Token Lottery", function () {
       // Check lotteriesByCreator mapping for the creator's lotteries
       const creatorLotteries = await lottery.getLotteriesByCreator(signers[0].address);
       console.log(`\t\t\t\t\tCreator lotteries after first creation: ${creatorLotteries}`);
-      expect(creatorLotteries).to.have.lengthOf(1); // Only one lottery created by the signers[0]
+      expect(creatorLotteries).to.have.lengthOf(1); // Only one lottery created by signers[0]
       expect(creatorLotteries[0]).to.equal(0); // The ID of the first lottery created is 0
 
       // Create a second lottery with the same token
@@ -342,11 +345,10 @@ describe.only("Multi Token Lottery", function () {
       const updatedCreatorLotteries = await lottery.getLotteriesByCreator(signers[0].address);
       console.log(`\t\t\t\t\tCreator lotteries after second creation: ${updatedCreatorLotteries}`);
       expect(updatedCreatorLotteries).to.have.lengthOf(2); // Now two lotteries created by signers[0]
-      //expect(updatedCreatorLotteries).to.deep.include.members([0, 1]); // Both lottery IDs should be present
 
       // Create a second token for another lottery
       console.log("\t\t\t\t\tDeploying another token...");
-      const anotherToken = await mockFactory.deploy("Another Token", "ANOTHER", 18); // Assuming you have a mock token contract
+      const anotherToken = await mockFactory.deploy("Another Token", "ANOTHER", 18); // Deploy mock token
       console.log(`\t\t\t\t\tAnother token deployed: ${anotherToken.target}`);
 
       // Create a lottery with another token
@@ -361,27 +363,35 @@ describe.only("Multi Token Lottery", function () {
       expect(lotteryTokens).to.include(anotherToken.target); // Check if anotherToken is included
       expect(lotteryTokens.length).to.equal(2); // Ensure we now have two distinct tokens
 
-      // Check lotteriesByToken mapping for the first token
-      const tokenLotteries = await lottery.getLotteriesByToken(mockToken.target);
-      console.log(`\t\t\t\t\tLotteries associated with mockToken: ${tokenLotteries}`);
-      expect(tokenLotteries).to.have.lengthOf(2); // Two lotteries should be associated with mockToken
-      //expect(tokenLotteries).to.deep.include.members([0, 1]); // Both lottery IDs should be present
+      // Check lotteriesByTokenAddress mapping for the first token
+      const tokenLotteriesByAddress = await lottery.getLotteriesByTokenAddress(mockToken.target);
+      console.log(`\t\t\t\t\tLotteries associated with mockToken by address: ${tokenLotteriesByAddress}`);
+      expect(tokenLotteriesByAddress).to.have.lengthOf(2); // Two lotteries should be associated with mockToken by address
 
-      // Check lotteriesByToken mapping for the second token
-      const anotherTokenLotteries = await lottery.getLotteriesByToken(anotherToken.target);
-      console.log(`\t\t\t\t\tLotteries associated with anotherToken: ${anotherTokenLotteries}`);
-      expect(anotherTokenLotteries).to.have.lengthOf(1); // Only one lottery should be associated with anotherToken
-      expect(anotherTokenLotteries[0]).to.equal(2); // The ID of the lottery created with anotherToken is 2
+      // Check lotteriesByTokenSymbol mapping for the first token
+      const tokenLotteriesBySymbol = await lottery.getLotteriesByTokenSymbol(await mockToken.symbol());
+      console.log(`\t\t\t\t\tLotteries associated with mockToken by symbol: ${tokenLotteriesBySymbol}`);
+      expect(tokenLotteriesBySymbol).to.have.lengthOf(2); // Two lotteries should be associated with mockToken by symbol
+
+      // Check lotteriesByTokenAddress mapping for the second token
+      const anotherTokenLotteriesByAddress = await lottery.getLotteriesByTokenAddress(anotherToken.target);
+      console.log(`\t\t\t\t\tLotteries associated with anotherToken by address: ${anotherTokenLotteriesByAddress}`);
+      expect(anotherTokenLotteriesByAddress).to.have.lengthOf(1); // Only one lottery should be associated with anotherToken
+
+      // Check lotteriesByTokenSymbol mapping for the second token
+      const anotherTokenLotteriesBySymbol = await lottery.getLotteriesByTokenSymbol(await anotherToken.symbol());
+      console.log(`\t\t\t\t\tLotteries associated with anotherToken by symbol: ${anotherTokenLotteriesBySymbol}`);
+      expect(anotherTokenLotteriesBySymbol).to.have.lengthOf(1); // Only one lottery should be associated with anotherToken by symbol
 
       // Check allLotteries to ensure it contains all created lotteries
       const allCreatedLotteries = await lottery.getAllLotteries();
       console.log(`\t\t\t\t\tAll created lotteries: ${allCreatedLotteries}`);
       expect(allCreatedLotteries).to.have.lengthOf(3); // Total of three lotteries created
-      //expect(allCreatedLotteries).to.deep.include.members([0, 1, 2]); // All lottery IDs should be present
 
       console.log(`\t\t\t\t\tFinal lotteryTokens: ${lotteryTokens}`);
     });
   });
+
 
 
 

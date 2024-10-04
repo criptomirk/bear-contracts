@@ -97,4 +97,10 @@ interface IERC20 {
      * {IERC20-balanceOf} and {IERC20-transfer}.
      */
     function decimals() external view returns (uint8);
+
+    /**
+     * @dev Returns the symbol of the token, usually a shorter version of the
+     * name.
+     */
+    function symbol() external view returns (string memory);
 }
