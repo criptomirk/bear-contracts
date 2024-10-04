@@ -5,11 +5,6 @@ import "./IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 contract MultiTokenLottery is Ownable(msg.sender) {
-    struct Winner {
-        address winnerAddress;
-        uint256 round;
-    }
-
     struct Lottery {
         address tokenAddress;
         uint256 ticketPrice;
@@ -23,11 +18,14 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         address reserveReceiver; // Custom reserve fund receiver for this lottery
     }
 
-    address[] lotteryTokens;
-    mapping(address => mapping(uint256 => Lottery)) public lotteries; // Supports multiple lotteries for each token
-    mapping(address => uint256) public lotteryCount; // Track the number of lotteries for each token
+    uint256 public lotteryCounter; // Incremental ID for all lotteries
+    address[] public lotteryTokens; // Track tokens that have associated lotteries
+    mapping(uint256 => Lottery) public lotteries; // Mapping for lotteryId => Lottery
+    mapping(address => uint256[]) public lotteriesByCreator; // Track lotteries created by each address
+    mapping(address => uint256[]) public lotteriesByToken; // Track lotteries created by each address
+    uint256[] public allLotteries; // Optional: Array to track all lotteries created
 
-    address public reserveFund; // The main reserve fund set by the contract owner
+    address public reserveFund; // Main reserve fund set by the contract owner
     uint256 public creationFee = 200_000 ether; // Creation fee as a constant
     uint256 public constant buyFee = 10_000 ether; // Buy fee as a constant
 
@@ -59,54 +57,56 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             require(msg.value >= creationFee, "Insufficient creation fee");
         }
 
-        uint256 currentLotteryId = lotteryCount[tokenAddress]++;
-        Lottery storage lottery = lotteries[tokenAddress][currentLotteryId];
+        uint256 lotteryId = lotteryCounter++; // Increment lottery ID for new lottery
+        Lottery storage lottery = lotteries[lotteryId];
 
         lottery.tokenAddress = tokenAddress;
         lottery.ticketPrice = ticketPrice;
         lottery.roundEndTime = block.timestamp + duration;
         lottery.roundDuration = duration;
 
-        // Set custom reserve fund receiver for this lottery
+        // Set custom reserve fund receiver for this lottery or default to main reserve
         lottery.reserveReceiver = _reserveReceiver != address(0)
             ? _reserveReceiver
             : reserveFund;
 
-        // Add tokenAddress to lotteryTokens if it's a new token
-        if (lotteryCount[tokenAddress] == 1) {
+        // Add tokenAddress to lotteryTokens if this is the first lottery for the token
+        if (lotteriesByToken[tokenAddress].length == 0) {
             lotteryTokens.push(tokenAddress);
         }
+
+        // Push lotteryId to the list of lotteries created by the sender
+        // and  lotteryId to the global list for easy retrieval
+        lotteriesByCreator[msg.sender].push(lotteryId);
+        lotteriesByToken[tokenAddress].push(lotteryId);
+        allLotteries.push(lotteryId);
 
         // Transfer the creation fee to the main reserve fund
         (bool success, ) = reserveFund.call{value: msg.value}("");
         require(success, "Failed to transfer creation fee to reserve fund");
     }
 
-    function buyTickets(
-        address tokenAddress,
-        uint256 lotteryId,
-        uint256 quantity
-    ) external payable {
+    function buyTickets(uint256 lotteryId, uint256 quantity) external payable {
         require(quantity > 0, "Must buy at least one ticket");
         require(msg.value >= buyFee, "Insufficient buy fee");
 
-        Lottery storage lottery = lotteries[tokenAddress][lotteryId];
+        Lottery storage lottery = lotteries[lotteryId];
         require(block.timestamp < lottery.roundEndTime, "Lottery round ended");
 
         uint256 totalCost = lottery.ticketPrice * quantity;
         require(totalCost >= lottery.ticketPrice, "Cost calculation overflow");
         require(
-            IERC20(tokenAddress).allowance(msg.sender, address(this)) >=
+            IERC20(lottery.tokenAddress).allowance(msg.sender, address(this)) >=
                 totalCost,
             "Insufficient allowance"
         );
         require(
-            IERC20(tokenAddress).balanceOf(msg.sender) >= totalCost,
+            IERC20(lottery.tokenAddress).balanceOf(msg.sender) >= totalCost,
             "Insufficient balance"
         );
 
         require(
-            IERC20(tokenAddress).transferFrom(
+            IERC20(lottery.tokenAddress).transferFrom(
                 msg.sender,
                 address(this),
                 totalCost
@@ -123,17 +123,19 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         lottery.totalBurned += burnShare;
         lottery.buyFeePool += buyFee;
 
-        address nullAddress = 0x0000000000000000000000000000000000000000;
         address deadAddress = 0x000000000000000000000000000000000000dEaD;
 
-        try IERC20(tokenAddress).transfer(nullAddress, burnShare) {
-            // Do nothing
+        try IERC20(lottery.tokenAddress).transfer(deadAddress, burnShare) {
+            // Burn tokens
         } catch {
-            IERC20(tokenAddress).transfer(deadAddress, burnShare);
+            revert("Burn failed");
         }
 
         // Transfer reserve share to custom reserveReceiver
-        IERC20(tokenAddress).transfer(lottery.reserveReceiver, reserveShare);
+        IERC20(lottery.tokenAddress).transfer(
+            lottery.reserveReceiver,
+            reserveShare
+        );
 
         // Transfer the buyFee to the main reserve fund
         (bool sentToMainReserve, ) = reserveFund.call{value: buyFee}("");
@@ -147,32 +149,28 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         }
     }
 
-    function drawWinner(address tokenAddress, uint lotteryId) external {
-        Lottery storage lottery = lotteries[tokenAddress][lotteryId];
+    function drawWinner(uint256 lotteryId) external {
+        Lottery storage lottery = lotteries[lotteryId];
 
         require(block.timestamp >= lottery.roundEndTime, "Round not yet ended");
         require(lottery.participants.length > 0, "No participants");
 
-        uint256 winnerIndex = random(tokenAddress, lotteryId) %
-            lottery.participants.length;
+        uint256 winnerIndex = random(lotteryId) % lottery.participants.length;
         address winner = lottery.participants[winnerIndex];
 
         uint256 tokenPrize = lottery.prizePool;
 
         // Transfer the prize pool (ERC20 tokens) to the winner
         require(
-            IERC20(tokenAddress).transfer(winner, tokenPrize),
+            IERC20(lottery.tokenAddress).transfer(winner, tokenPrize),
             "Transfer to winner failed"
         );
 
         lottery.lastWinner = winner;
     }
 
-    function random(
-        address tokenAddress,
-        uint lotteryId
-    ) private view returns (uint256 index) {
-        Lottery storage lottery = lotteries[tokenAddress][lotteryId];
+    function random(uint256 lotteryId) private view returns (uint256) {
+        Lottery storage lottery = lotteries[lotteryId];
         return
             uint256(
                 keccak256(
@@ -185,8 +183,14 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             );
     }
 
+    // Getter functions
+    function getParticipants(
+        uint256 lotteryId
+    ) external view returns (address[] memory) {
+        return lotteries[lotteryId].participants;
+    }
+
     function getLotteryData(
-        address _tokenAddress,
         uint256 lotteryId
     )
         external
@@ -204,7 +208,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             address reserveReceiver
         )
     {
-        Lottery storage lottery = lotteries[_tokenAddress][lotteryId];
+        Lottery storage lottery = lotteries[lotteryId];
 
         return (
             lottery.tokenAddress,
@@ -220,41 +224,27 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         );
     }
 
-    // Getter functions
-    function getParticipants(
-        address tokenAddress,
-        uint lotteryId
-    ) external view returns (address[] memory) {
-        return lotteries[tokenAddress][lotteryId].participants;
+    // Get all lotteries created by an address
+    function getLotteriesByCreator(
+        address creator
+    ) external view returns (uint256[] memory) {
+        return lotteriesByCreator[creator];
     }
 
-    function getTimeLeft(
-        address tokenAddress,
-        uint lotteryId
-    ) external view returns (uint256) {
-        Lottery storage lottery = lotteries[tokenAddress][lotteryId];
-        if (block.timestamp >= lottery.roundEndTime) return 0;
-        return lottery.roundEndTime - block.timestamp;
+    // Get all lotteries created by an address
+    function getLotteriesByToken(
+        address tokenAddress
+    ) external view returns (uint256[] memory) {
+        return lotteriesByToken[tokenAddress];
     }
 
-    function getTotalTickets(
-        address tokenAddress,
-        uint lotteryId
-    ) external view returns (uint256) {
-        return lotteries[tokenAddress][lotteryId].participants.length;
+    // Optional: Get all lotteries
+    function getAllLotteries() external view returns (uint256[] memory) {
+        return allLotteries;
     }
 
-    function getTotalBurned(
-        address tokenAddress,
-        uint lotteryId
-    ) external view returns (uint256) {
-        return lotteries[tokenAddress][lotteryId].totalBurned;
-    }
-
-    function getLastWinner(
-        address tokenAddress,
-        uint lotteryId
-    ) external view returns (address) {
-        return lotteries[tokenAddress][lotteryId].lastWinner;
+    // Function to get the list of tracked lottery tokens
+    function getLotteryTokens() external view returns (address[] memory) {
+        return lotteryTokens;
     }
 }

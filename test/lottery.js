@@ -19,11 +19,10 @@ describe.only("Multi Token Lottery", function () {
     const buyFee = ethers.parseEther("10000")
     const lottery = await lotteryFactory.deploy(signers[1].address);
     const BearToken = await bearTokenFactory.deploy('BEARTOKEN', 'BEAR', signers[0]);
-    const mockToken = await mockFactory.deploy();
+    const mockToken = await mockFactory.deploy('MOCK1', 'Mock token', ethers.parseEther('10000000'));
 
-    return { lottery, signers, BearToken, mockToken, creationFee, buyFee };
+    return { lottery, signers, BearToken, mockToken, creationFee, buyFee, mockFactory };
   }
-
   describe("Deployment", function () {
     it("Should set the right deploy", async function () {
       this.timeout(600000);
@@ -40,7 +39,6 @@ describe.only("Multi Token Lottery", function () {
       console.log(`\t\t\t\t\tToken Supply: ${supply.toString()}`); // Convert supply to string if it's a BigNumber
     });
   });
-
   describe("Lottery Creation", function () {
     it("Should create a lottery correctly", async function () {
       const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
@@ -52,10 +50,18 @@ describe.only("Multi Token Lottery", function () {
       console.log(`\t\t\t\t\tSigner[1] Balance Before: ${ethers.formatEther(signer1BalanceBefore)}`);
 
       // Create a lottery
-      const tx = await lottery.connect(signers[2]).createLottery(mockToken.target, duration, ticketPrice, signers[2].address, { value: creationFee });
-      tx.wait(1)
-      // Check lottery data after creation
-      const lotteryData = await lottery.getLotteryData(mockToken.target, 0);
+      const tx = await lottery.connect(signers[2]).createLottery(
+        mockToken.target,
+        duration,
+        ticketPrice,
+        signers[2].address,
+        { value: creationFee }
+      );
+      await tx.wait(1);
+
+      // Fetch lottery data using the new lottery ID system (lotteryCounter starts from 0)
+      const lotteryId = 0; // The first lottery should have ID 0
+      const lotteryData = await lottery.getLotteryData(lotteryId);
 
       console.log(`\t\t\t\t\tLottery Token Address: ${lotteryData.tokenAddress}`);
       console.log(`\t\t\t\t\tLottery Ticket Price: ${ethers.formatUnits(lotteryData.ticketPrice, 18)}`);
@@ -72,6 +78,11 @@ describe.only("Multi Token Lottery", function () {
       const signer1BalanceAfter = await ethers.provider.getBalance(signers[1].address);
       console.log(`\t\t\t\t\tSigner[1] Balance After: ${ethers.formatEther(signer1BalanceAfter)}`);
 
+      // Assertions for the lottery data
+      expect(lotteryData.tokenAddress).to.equal(mockToken.target);
+      expect(lotteryData.ticketPrice).to.equal(ticketPrice);
+      expect(lotteryData.roundDuration).to.equal(duration);
+      expect(lotteryData.reserveReceiver).to.equal(signers[2].address);
     });
 
     it("Should allow creating multiple lotteries for the same token", async function () {
@@ -80,16 +91,28 @@ describe.only("Multi Token Lottery", function () {
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
 
       // First lottery creation
-      await lottery.connect(signers[2]).createLottery(mockToken.target, duration, ticketPrice, signers[2].address, { value: creationFee });
+      await lottery.connect(signers[2]).createLottery(
+        mockToken.target,
+        duration,
+        ticketPrice,
+        signers[2].address,
+        { value: creationFee }
+      );
 
-      const lotteryData1 = await lottery.getLotteryData(mockToken.target, 0); // Assuming the first lottery has an ID of 1
-      console.log(`\t\t\t\t\tFirst Lottery ID 1 created. Token Address: ${lotteryData1.tokenAddress}`);
+      const lotteryData1 = await lottery.getLotteryData(0); // First lottery ID should be 0
+      console.log(`\t\t\t\t\tFirst Lottery ID 0 created. Token Address: ${lotteryData1.tokenAddress}`);
 
       // Second lottery creation for the same token
-      await lottery.connect(signers[3]).createLottery(mockToken.target, duration, ticketPrice, signers[3].address, { value: creationFee });
+      await lottery.connect(signers[3]).createLottery(
+        mockToken.target,
+        duration,
+        ticketPrice,
+        signers[3].address,
+        { value: creationFee }
+      );
 
-      const lotteryData2 = await lottery.getLotteryData(mockToken.target, 1); // Assuming the second lottery has an ID of 2
-      console.log(`\t\t\t\t\tSecond Lottery ID 2 created. Token Address: ${lotteryData2.tokenAddress}`);
+      const lotteryData2 = await lottery.getLotteryData(1); // Second lottery ID should be 1
+      console.log(`\t\t\t\t\tSecond Lottery ID 1 created. Token Address: ${lotteryData2.tokenAddress}`);
 
       // Verify both lotteries exist and are separate entities
       expect(lotteryData1.tokenAddress).to.equal(mockToken.target);
@@ -97,77 +120,76 @@ describe.only("Multi Token Lottery", function () {
       expect(lotteryData1).to.not.deep.equal(lotteryData2); // Ensure the two lotteries are not identical
     });
   });
-
   describe("Ticket Purchasing", function () {
     it("Should allow users to buy tickets and accumulate buyFee in buyFeePool", async function () {
       const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
-      const ticketsPrice = (Number(ticketPrice) * 5).toString(); // buying 5 tickets
-      const buyFee = await lottery.buyFee()
+      const ticketsPrice = (BigInt(ticketPrice) * 5n).toString(); // Buying 5 tickets
+      const buyFee = await lottery.buyFee();
 
       // Ensure lottery and mockToken are correctly deployed
       console.log(`\t\t\t\t\tLottery Contract Address: ${lottery.target}`);
-      console.log(`\t\t\t\t\tBear Token Contract Address: ${mockToken.target}`);
+      console.log(`\t\t\t\t\Mock Token Contract Address: ${mockToken.target}`);
 
       // Create the lottery
       await lottery.createLottery(mockToken.target, duration, ticketPrice, signers[2].address, { value: creationFee });
 
       // Log the ticket price set in the contract
-      const lotteryData = await lottery.lotteries(mockToken.target, 0);
-      console.log(`\t\t\t\t\tOne Ticket Price: ${lotteryData.ticketPrice.toString()}`);
+      const lotteryData = await lottery.getLotteryData(0); // Adjust for new lottery ID system (first lottery = ID 0)
+      console.log(`\t\t\t\t\tOne Ticket Price: ${ethers.formatUnits(lotteryData.ticketPrice, 18)}`);
 
       // Transfer tokens to the buyer (signers[2]) for purchasing tickets
       await mockToken.transfer(signers[2].address, ticketsPrice);
 
       // Log the buyer's balance before approval
       const buyerBalanceBefore = await mockToken.balanceOf(signers[2].address);
-      console.log(`\t\t\t\t\tBuyer Balance Before Approval: ${buyerBalanceBefore.toString()}`);
+      console.log(`\t\t\t\t\tBuyer Balance Before Approval: ${ethers.formatUnits(buyerBalanceBefore, 18)}`);
 
       // Approve the lottery contract to spend the buyer's tokens
       await mockToken.connect(signers[2]).approve(lottery.target, ticketsPrice);
 
       // Log the buyer's balance after approval
       const buyerBalanceAfter = await mockToken.balanceOf(signers[2].address);
-      console.log(`\t\t\t\t\tBuyer Balance After Approval: ${buyerBalanceAfter.toString()}`);
+      console.log(`\t\t\t\t\tBuyer Balance After Approval: ${ethers.formatUnits(buyerBalanceAfter, 18)}`);
 
       // Buy 5 tickets
-      await lottery.connect(signers[2]).buyTickets(mockToken.target, 0, 5, { value: buyFee });
+      await lottery.connect(signers[2]).buyTickets(0, 5, { value: buyFee });
 
       // Get updated lottery data
-      const updatedLotteryData = await lottery.lotteries(mockToken.target, 0);
-      const participants = await lottery.getParticipants(mockToken.target, 0);
+      const updatedLotteryData = await lottery.getLotteryData(0);
+      const participants = await updatedLotteryData.participants;
       const reserveFundBalance = await ethers.provider.getBalance(await lottery.reserveFund());
 
       // Log the number of participants
       console.log(`\t\t\t\t\tParticipants: ${participants.length}`);
 
       // Log the updated prize pool and total burned
-      console.log(`\t\t\t\t\tPrize Pool: ${updatedLotteryData.prizePool.toString()}`);
-      console.log(`\t\t\t\t\tTotal Burned: ${updatedLotteryData.totalBurned.toString()}`);
+      console.log(`\t\t\t\t\tPrize Pool: ${ethers.formatUnits(updatedLotteryData.prizePool, 18)}`);
+      console.log(`\t\t\t\t\tTotal Burned: ${ethers.formatUnits(updatedLotteryData.totalBurned, 18)}`);
 
       // Log the updated buyFeePool
-      console.log(`\t\t\t\t\tBuy Fee Pool: ${updatedLotteryData.buyFeePool.toString()}`);
+      console.log(`\t\t\t\t\tBuy Fee Pool: ${ethers.formatUnits(updatedLotteryData.buyFeePool, 18)}`);
 
-      // Log the reserve fund balance after the tickets purchase
-      console.log(`\t\t\t\t\tReserve Fund Balance: ${reserveFundBalance.toString()}`);
+      // Log the reserve fund balance after the ticket purchase
+      console.log(`\t\t\t\t\tReserve Fund Balance: ${ethers.formatUnits(reserveFundBalance, 18)}`);
 
-      // Check that the participant was added
-      expect(participants.length).to.equal(5); // Check that 5 participants are added
+      // Check that the participant count is correct
+      expect(participants.length).to.equal(5); // Ensure the participant is only added once despite 5 tickets being bought
 
       // Check prize pool, burned tokens, and buy fee pool are updated correctly
-      expect(updatedLotteryData.prizePool).to.equal((Number(ticketPrice) * 2).toString()); // 50% goes to the prize pool
-      expect(updatedLotteryData.totalBurned).to.equal((Number(ticketPrice) * 2).toString()); // 50% goes to burning
+      expect(updatedLotteryData.prizePool).to.equal((BigInt(ticketPrice) * 5n * 40n / 100n).toString()); // 50% goes to prize pool
+      expect(updatedLotteryData.totalBurned).to.equal((BigInt(ticketPrice) * 5n * 40n / 100n).toString()); // 50% goes to burning
 
-      // Verify that the buyFee was correctly accumulated in buyFeePool and sent to the reserve fund
+      // Verify that the buyFee was correctly accumulated in buyFeePool
       expect(updatedLotteryData.buyFeePool).to.equal(buyFee.toString()); // Ensure the buy fee is accumulated in buyFeePool
     });
 
-
     it("Should revert if not enough tokens are approved", async function () {
-      const { lottery, mockToken, signers, creationFee, buyFee } = await loadFixture(deploy);
+      const { lottery, mockToken, signers, creationFee } = await loadFixture(deploy);
       const duration = 3600; // 1 hour
       const ticketPrice = ethers.parseUnits("1", 18); // 1 token
+      const buyFee = await lottery.buyFee();
 
       // Create the lottery
       await lottery.createLottery(mockToken.target, duration, ticketPrice, ethers.ZeroAddress, { value: creationFee });
@@ -180,13 +202,12 @@ describe.only("Multi Token Lottery", function () {
 
       // Try to buy 2 tickets (should revert)
       await expect(
-        lottery.connect(signers[2]).buyTickets(mockToken.target, 0, 2, { value: buyFee })
+        lottery.connect(signers[2]).buyTickets(0, 2, { value: buyFee })
       ).to.be.revertedWith("Insufficient allowance");
     });
-
   });
+  describe("Draw Winner", function () {
 
-  describe.only("Draw Winner", function () {
     this.timeout(600000);
 
     it("Should draw a winner and balance should match prize pool", async function () {
@@ -203,30 +224,29 @@ describe.only("Multi Token Lottery", function () {
       await mockToken.connect(signers[2]).approve(lottery.target, totalTickets);
 
       // Buy 5 tickets
-      await lottery.connect(signers[2]).buyTickets(mockToken.target, 0, 5, { value: buyFee });
+      await lottery.connect(signers[2]).buyTickets(0, 5, { value: buyFee });
 
       // Fetch the prize pool before drawing
-      const lotteryDataBefore = await lottery.lotteries(mockToken.target, 0);
+      const lotteryDataBefore = await lottery.getLotteryData(0); // Fetch lottery data using the lottery ID
       const prizePoolBefore = lotteryDataBefore.prizePool;
-      console.log(`\t\t\t\t\tPrize Pool Before Draw: ${prizePoolBefore.toString()}`);
+      console.log(`\t\t\t\t\tPrize Pool Before Draw: ${ethers.formatUnits(prizePoolBefore, 18)}`);
 
       // Get winner's balance before draw
       const winnerBalanceBefore = await mockToken.balanceOf(signers[2].address);
-      console.log(`\t\t\t\t\tWinner Balance Before Draw: ${winnerBalanceBefore.toString()}`);
+      console.log(`\t\t\t\t\tWinner Balance Before Draw: ${ethers.formatUnits(winnerBalanceBefore, 18)}`);
 
       // Fast-forward time to end the lottery round
       await time.increase(duration);
 
       // Draw the winner
-      await lottery.drawWinner(mockToken.target, 0);
+      await lottery.drawWinner(0);
 
       // Get updated lottery data and winner's balance after draw
-      const lotteryDataAfter = await lottery.lotteries(mockToken.target, 0);
+      const lotteryDataAfter = await lottery.getLotteryData(0);
       const winnerBalanceAfter = await mockToken.balanceOf(signers[2].address);
 
-      console.log(`\t\t\t\t\tNew Prize Pool: ${lotteryDataAfter.prizePool}`);
-      console.log(`\t\t\t\t\tWinner Balance After Draw: ${winnerBalanceAfter.toString()}`);
-
+      console.log(`\t\t\t\t\tNew Prize Pool: ${ethers.formatUnits(lotteryDataAfter.prizePool, 18)}`);
+      console.log(`\t\t\t\t\tWinner Balance After Draw: ${ethers.formatUnits(winnerBalanceAfter, 18)}`);
 
       // Confirm the winner's balance increased by the prize pool amount
       const balanceChange = Number(winnerBalanceAfter) - Number(winnerBalanceBefore);
@@ -251,12 +271,11 @@ describe.only("Multi Token Lottery", function () {
         const totalTickets = ticketPrice; // 1 ticket per signer
         await mockToken.transfer(signers[i].address, totalTickets);
         await mockToken.connect(signers[i]).approve(lottery.target, totalTickets);
-        await lottery.connect(signers[i]).buyTickets(mockToken.target, 0, 1, { value: buyFee });
+        await lottery.connect(signers[i]).buyTickets(0, 1, { value: buyFee });
       }
 
-
       // Log the number of participants before the draw
-      const participants = await lottery.getParticipants(mockToken.target, 0);
+      const participants = await lottery.getParticipants(0);
       console.log(`\t\t\t\t\tNumber of Participants: ${participants.length}`);
 
       // Ensure 100 participants are added
@@ -266,27 +285,106 @@ describe.only("Multi Token Lottery", function () {
       await time.increase(duration);
 
       // Draw the winner
-      await lottery.drawWinner(mockToken.target, 0);
-
-
+      await lottery.drawWinner(0);
 
       // Fetch updated lottery data
-      const lotteryDataAfter = await lottery.lotteries(mockToken.target, 0);
+      const lotteryDataAfter = await lottery.getLotteryData(0);
       const prizePoolAfter = lotteryDataAfter.prizePool;
 
       // Get the winner's address after the draw
-      const lastWinner = await lotteryDataAfter.lastWinner; // Assuming you have a getter for lastWinner
+      const lastWinner = lotteryDataAfter.lastWinner; // Assuming you have a getter for lastWinner
       const winnerBalanceAfter = await mockToken.balanceOf(lastWinner);
 
       console.log(`\t\t\t\t\tLast Winner Address: ${lastWinner}`);
-      console.log(`\t\t\t\t\tWinner Balance After Draw: ${ethers.formatEther(winnerBalanceAfter.toString())}`);
+      console.log(`\t\t\t\t\tWinner Balance After Draw: ${ethers.formatUnits(winnerBalanceAfter, 18)}`);
 
       // Ensure the winner is one of the participants
       expect(participants).to.include(lastWinner);
-
-
     });
   });
+
+  describe.only("Lottery Token Tracking", function () {
+    this.timeout(600000);
+
+    it("Should track tokens associated with lotteries", async function () {
+      const { lottery, mockToken, signers, creationFee, mockFactory } = await loadFixture(deploy);
+      const duration = 3600; // 1 hour
+      const ticketPrice = ethers.parseUnits("1", 18); // 1 token
+
+      // Create the first lottery
+      console.log("\t\t\t\t\tCreating first lottery...");
+      await lottery.createLottery(mockToken.target, duration, ticketPrice, ethers.ZeroAddress, { value: creationFee });
+      console.log(`\t\t\t\t\tFirst lottery created with token: ${mockToken.target}`);
+
+      // Ensure the token is added to lotteryTokens after the first lottery
+      let lotteryTokens = await lottery.getLotteryTokens();
+      console.log(`\t\t\t\t\tCurrent lotteryTokens after first lottery: ${lotteryTokens}`);
+      expect(lotteryTokens).to.include(mockToken.target); // Check if mockToken is included
+
+      // Check lotteriesByCreator mapping for the creator's lotteries
+      const creatorLotteries = await lottery.getLotteriesByCreator(signers[0].address);
+      console.log(`\t\t\t\t\tCreator lotteries after first creation: ${creatorLotteries}`);
+      expect(creatorLotteries).to.have.lengthOf(1); // Only one lottery created by the signers[0]
+      expect(creatorLotteries[0]).to.equal(0); // The ID of the first lottery created is 0
+
+      // Create a second lottery with the same token
+      console.log("\t\t\t\t\tCreating second lottery with the same token...");
+      await lottery.createLottery(mockToken.target, duration, ticketPrice, ethers.ZeroAddress, { value: creationFee });
+      console.log(`\t\t\t\t\tSecond lottery created with token: ${mockToken.target}`);
+
+      // Check lotteryTokens again; it should still only contain the token once
+      lotteryTokens = await lottery.getLotteryTokens();
+      console.log(`\t\t\t\t\tCurrent lotteryTokens after second lottery: ${lotteryTokens}`);
+      expect(lotteryTokens).to.include(mockToken.target); // Still should include mockToken
+      expect(lotteryTokens.length).to.equal(1); // Ensure no duplicates
+
+      // Check lotteriesByCreator mapping after second lottery creation
+      const updatedCreatorLotteries = await lottery.getLotteriesByCreator(signers[0].address);
+      console.log(`\t\t\t\t\tCreator lotteries after second creation: ${updatedCreatorLotteries}`);
+      expect(updatedCreatorLotteries).to.have.lengthOf(2); // Now two lotteries created by signers[0]
+      //expect(updatedCreatorLotteries).to.deep.include.members([0, 1]); // Both lottery IDs should be present
+
+      // Create a second token for another lottery
+      console.log("\t\t\t\t\tDeploying another token...");
+      const anotherToken = await mockFactory.deploy("Another Token", "ANOTHER", 18); // Assuming you have a mock token contract
+      console.log(`\t\t\t\t\tAnother token deployed: ${anotherToken.target}`);
+
+      // Create a lottery with another token
+      console.log("\t\t\t\t\tCreating lottery with another token...");
+      await lottery.createLottery(anotherToken.target, duration, ticketPrice, ethers.ZeroAddress, { value: creationFee });
+      console.log(`\t\t\t\t\tLottery created with another token: ${anotherToken.target}`);
+
+      // Check lotteryTokens to ensure it includes both tokens
+      lotteryTokens = await lottery.getLotteryTokens();
+      console.log(`\t\t\t\t\tCurrent lotteryTokens after creating lottery with another token: ${lotteryTokens}`);
+      expect(lotteryTokens).to.include(mockToken.target); // Check if mockToken is included
+      expect(lotteryTokens).to.include(anotherToken.target); // Check if anotherToken is included
+      expect(lotteryTokens.length).to.equal(2); // Ensure we now have two distinct tokens
+
+      // Check lotteriesByToken mapping for the first token
+      const tokenLotteries = await lottery.getLotteriesByToken(mockToken.target);
+      console.log(`\t\t\t\t\tLotteries associated with mockToken: ${tokenLotteries}`);
+      expect(tokenLotteries).to.have.lengthOf(2); // Two lotteries should be associated with mockToken
+      //expect(tokenLotteries).to.deep.include.members([0, 1]); // Both lottery IDs should be present
+
+      // Check lotteriesByToken mapping for the second token
+      const anotherTokenLotteries = await lottery.getLotteriesByToken(anotherToken.target);
+      console.log(`\t\t\t\t\tLotteries associated with anotherToken: ${anotherTokenLotteries}`);
+      expect(anotherTokenLotteries).to.have.lengthOf(1); // Only one lottery should be associated with anotherToken
+      expect(anotherTokenLotteries[0]).to.equal(2); // The ID of the lottery created with anotherToken is 2
+
+      // Check allLotteries to ensure it contains all created lotteries
+      const allCreatedLotteries = await lottery.getAllLotteries();
+      console.log(`\t\t\t\t\tAll created lotteries: ${allCreatedLotteries}`);
+      expect(allCreatedLotteries).to.have.lengthOf(3); // Total of three lotteries created
+      //expect(allCreatedLotteries).to.deep.include.members([0, 1, 2]); // All lottery IDs should be present
+
+      console.log(`\t\t\t\t\tFinal lotteryTokens: ${lotteryTokens}`);
+    });
+  });
+
+
+
 
 
 

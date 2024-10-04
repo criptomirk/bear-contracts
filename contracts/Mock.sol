@@ -4,13 +4,18 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract MyToken is ERC20 {
-    // Define the initial supply as a state variable instead of a constant
     uint256 public initialSupply;
 
-    constructor() ERC20("MyToken", "MTK") {
-        // Set the total supply to 1 billion (1,000,000,000) tokens
-        initialSupply = 1_000_000_000 * (10 ** decimals());
+    // Modify the constructor to accept name, symbol, and initial supply as parameters
+    constructor(
+        string memory _name,
+        string memory _symbol,
+        uint256 _initialSupply
+    ) ERC20(_name, _symbol) {
+        // Set the total supply based on the provided initial supply
+        initialSupply = _initialSupply * (10 ** decimals());
 
-        _mint(msg.sender, initialSupply); // Mint the total supply to the contract deployer
+        // Mint the initial supply to the contract deployer
+        _mint(msg.sender, initialSupply);
     }
 }
