@@ -11,7 +11,6 @@ async function deploy() {
   const signers = await ethers.getSigners();
 
   const lotteryFactory = await ethers.getContractFactory("MultiTokenLottery");
-  const bearTokenFactory = await ethers.getContractFactory("FuckTheBears");
   const mockFactory = await ethers.getContractFactory("MyToken");
 
   // Set signers[1] as the reserveFund
