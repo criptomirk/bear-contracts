@@ -12,7 +12,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         uint256 roundEndTime;
         uint256 roundDuration;
         address[] participants; // Array of participants
-        address lastWinner;
+        address winner;
         uint256 prizePool;
         uint256 totalBurned; // Total burned tokens for this lottery
         uint256 buyFeePool; // Accumulated 50% of buyFee for this lottery round
@@ -29,8 +29,8 @@ contract MultiTokenLottery is Ownable(msg.sender) {
     uint256[] public allLotteries; // Optional: Array to track all lotteries created
 
     address public reserveFund; // Main reserve fund set by the contract owner
-    uint256 public creationFee = 200_000 ether; // Creation fee as a constant
-    uint256 public constant buyFee = 10_000 ether; // Buy fee as a constant
+    uint256 public creationFee = 200_000 ether; // Creation fee as a constant 200,000
+    uint256 public constant buyFee = 10_0000 ether; // Buy fee as a constant 10, 1000
 
     constructor(address _reserveFund) {
         require(_reserveFund != address(0), "Invalid reserve fund address");
@@ -76,7 +76,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         // Set custom reserve fund receiver for this lottery or default to main reserve
         lottery.reserveReceiver = _reserveReceiver != address(0)
             ? _reserveReceiver
-            : reserveFund;
+            : msg.sender;
 
         // Add tokenAddress to lotteryTokens if this is the first lottery for the token
         if (lotteriesByTokenAddress[tokenAddress].length == 0) {
@@ -100,7 +100,6 @@ contract MultiTokenLottery is Ownable(msg.sender) {
         require(msg.value >= buyFee, "Insufficient buy fee");
 
         Lottery storage lottery = lotteries[lotteryId];
-        require(block.timestamp < lottery.roundEndTime, "Lottery round ended");
         require(lottery.isActive, "Lottery is not active");
 
         uint256 totalCost = lottery.ticketPrice * quantity;
@@ -162,6 +161,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
     function drawWinner(uint256 lotteryId) external {
         Lottery storage lottery = lotteries[lotteryId];
 
+        require(lottery.isActive, "Lottery is not active");
         require(block.timestamp >= lottery.roundEndTime, "Round not yet ended");
         require(lottery.participants.length > 0, "No participants");
 
@@ -176,7 +176,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             "Transfer to winner failed"
         );
 
-        lottery.lastWinner = winner;
+        lottery.winner = winner;
         lottery.isActive = false; // Mark the lottery as ended
     }
 
@@ -213,7 +213,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             uint256 roundEndTime,
             uint256 roundDuration,
             address[] memory participants,
-            address lastWinner,
+            address winner,
             uint256 prizePool,
             uint256 totalBurned,
             uint256 buyFeePool,
@@ -230,7 +230,7 @@ contract MultiTokenLottery is Ownable(msg.sender) {
             lottery.roundEndTime,
             lottery.roundDuration,
             lottery.participants,
-            lottery.lastWinner,
+            lottery.winner,
             lottery.prizePool,
             lottery.totalBurned,
             lottery.buyFeePool,

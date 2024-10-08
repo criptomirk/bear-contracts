@@ -21,14 +21,14 @@ async function deploy() {
   console.log("MultiTokenLottery deployed to:", lottery.target);
   console.log("Reserve fund address (signer[1]):", signers[1].address);
 
-  const sBurn = await mockFactory.deploy('Super Burn', 'sBURN', ethers.parseEther('10000000'));
-  console.log("Super Burn Token deployed to:", sBurn.target);
+  // const sBurn = await mockFactory.deploy('Super Burn', 'sBURN', 1000000000);
+  // console.log("Super Burn Token deployed to:", sBurn.target);
 
-  const FUCK = await mockFactory.deploy('Fuck Token', '$FUCK', ethers.parseEther('10000000'));
-  console.log("Fuck Token deployed to:", FUCK.target);
+  // const FUCK = await mockFactory.deploy('Fuck Token', '$FUCK', 1000000000);
+  // console.log("Fuck Token deployed to:", FUCK.target);
 
-  const mockToken = await mockFactory.deploy('Pulse Burn', 'BURN', ethers.parseEther('10000000'));
-  console.log("Pulse Burn Token deployed to:", mockToken.target);
+  // const BURN = await mockFactory.deploy('Pulse Burn', 'BURN', 1000000000);
+  // console.log("Pulse Burn Token deployed to:", BURN.target);
 }
 
 // We recommend this pattern to be able to use async/await everywhere
